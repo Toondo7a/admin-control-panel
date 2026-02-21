@@ -1,0 +1,6 @@
+streamlit
+supabase
+pandas
+PyPDF2
+pillow
+google-genai
