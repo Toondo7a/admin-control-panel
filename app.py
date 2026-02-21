@@ -6,7 +6,9 @@ from supabase import create_client, Client
 from google import genai
 import io
 
-# --- SECRETS ---
+st.set_page_config(page_title="Scout AI Control Panel", layout="wide")
+
+# --- SECRETS & LOGIN ---
 try:
     ADMIN_PASSWORD = st.secrets["ADMIN_PASSWORD"]
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -16,7 +18,6 @@ except KeyError as e:
     st.error(f"Missing Secret Key: {e}")
     st.stop()
 
-# --- LOGIN ---
 if "logged_in" not in st.session_state: st.session_state.logged_in = False
 if not st.session_state.logged_in:
     pwd = st.text_input("Enter Admin Password", type="password")
@@ -28,84 +29,182 @@ if not st.session_state.logged_in:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-st.title("⚙️ AI Design Center - Control Panel V2")
+st.title("⚜️ Scout AI - Ultimate Control Panel V3")
+
+# --- FETCH DYNAMIC DATA ---
+def get_categories():
+    try:
+        data = supabase.table("categories").select("name").execute().data
+        return [item["name"] for item in data]
+    except: return ["General"]
+
+def get_kb_data():
+    try:
+        return supabase.table("knowledge_base").select("*").order("id").execute().data
+    except: return []
+
+categories_list = get_categories()
 
 # --- DASHBOARD TABS ---
-tab1, tab2, tab3, tab4 = st.tabs(["📄 Upload Files", "❓ Add FAQs", "🤖 AI Persona Setup", "🗄️ Database View"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📄 Add Content", "🗂️ Manage Knowledge Base", "🏷️ Categories", "🤖 AI Persona", "💬 Test Bot"
+])
 
-# --- TAB 1: UPLOAD FILES ---
+# ==========================================
+# TAB 1: ADD CONTENT (Uploads & FAQs)
+# ==========================================
 with tab1:
-    st.header("Upload Documents & Assets")
-    upload_category = st.selectbox("Select Category for Upload:", ["Livestreaming App", "Design Assets", "General Data", "Technical Rules"])
-    uploaded_files = st.file_uploader("Upload PDF, CSV, TXT, or Images", accept_multiple_files=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.header("Upload Files")
+        upload_category = st.selectbox("Category:", categories_list, key="up_cat")
+        uploaded_files = st.file_uploader("Upload PDF, CSV, TXT, or Images", accept_multiple_files=True)
+        if st.button("Process & Save Uploads"):
+            if uploaded_files:
+                with st.spinner("Saving to database..."):
+                    for file in uploaded_files:
+                        kb_text = ""
+                        if file.name.endswith('.pdf'):
+                            for page in PyPDF2.PdfReader(file).pages:
+                                if page.extract_text(): kb_text += page.extract_text() + "\n"
+                        elif file.name.endswith('.txt'):
+                            kb_text += file.getvalue().decode('utf-8') + "\n"
+                        if kb_text:
+                            supabase.table("knowledge_base").insert({"content": kb_text, "category": upload_category, "source_type": "Document"}).execute()
+                    st.success("✅ Files saved!")
+    
+    with col2:
+        st.header("Add Manual FAQ / Rule")
+        faq_category = st.selectbox("Category:", categories_list, key="faq_cat")
+        faq_q = st.text_input("Question / Topic:")
+        faq_a = st.text_area("Answer / Details:")
+        if st.button("Save Manual Entry"):
+            if faq_q and faq_a:
+                supabase.table("knowledge_base").insert({"content": f"Q: {faq_q}\nA: {faq_a}", "category": faq_category, "source_type": "FAQ"}).execute()
+                st.success("✅ FAQ Added!")
 
-    if st.button("Process & Save Uploads"):
-        if uploaded_files:
-            with st.spinner("Extracting and saving..."):
-                for file in uploaded_files:
-                    kb_text = ""
-                    if file.name.endswith('.pdf'):
-                        for page in PyPDF2.PdfReader(file).pages:
-                            if page.extract_text(): kb_text += page.extract_text() + "\n"
-                    elif file.name.endswith('.csv'):
-                        kb_text += pd.read_csv(file).to_string() + "\n"
-                    elif file.name.endswith('.txt'):
-                        kb_text += file.getvalue().decode('utf-8') + "\n"
-                    elif file.name.endswith(('.png', '.jpg', '.jpeg')):
-                        response = client.models.generate_content(
-                            model='gemini-2.5-flash', 
-                            contents=["Describe this image in high detail.", Image.open(file)]
-                        )
-                        kb_text += f"[Image Description: {response.text}]\n"
-                    
-                    if kb_text:
-                        supabase.table("knowledge_base").insert({
-                            "content": kb_text, 
-                            "category": upload_category,
-                            "source_type": "Document"
-                        }).execute()
-                st.success("✅ Files saved successfully!")
-
-# --- TAB 2: MANUAL FAQs ---
+# ==========================================
+# TAB 2: MANAGE KNOWLEDGE BASE (Edit/Delete)
+# ==========================================
 with tab2:
-    st.header("Add Custom FAQ")
-    st.markdown("Use this to manually type specific rules or answers you want the bot to know perfectly.")
-    faq_category = st.selectbox("FAQ Category:", ["Livestreaming App", "Design Assets", "General Data", "Technical Rules"])
-    faq_q = st.text_input("Question:")
-    faq_a = st.text_area("Answer:")
+    st.header("Database Editor")
+    kb_data = get_kb_data()
     
-    if st.button("Save FAQ to Database"):
-        if faq_q and faq_a:
-            combined_faq = f"Q: {faq_q}\nA: {faq_a}"
-            supabase.table("knowledge_base").insert({
-                "content": combined_faq,
-                "category": faq_category,
-                "source_type": "FAQ"
-            }).execute()
-            st.success("✅ FAQ Added!")
-        else:
-            st.warning("Please fill out both the question and answer.")
+    if kb_data:
+        df = pd.DataFrame(kb_data)
+        st.dataframe(df, use_container_width=True)
+        
+        st.divider()
+        st.subheader("Edit or Delete an Entry")
+        colA, colB = st.columns(2)
+        
+        with colA:
+            edit_id = st.number_input("Enter ID to Edit:", min_value=0, step=1)
+            new_content = st.text_area("New Content for this ID:", height=150)
+            if st.button("📝 Update Entry"):
+                supabase.table("knowledge_base").update({"content": new_content}).eq("id", edit_id).execute()
+                st.success(f"ID {edit_id} updated!")
+                st.rerun()
+                
+        with colB:
+            delete_id = st.number_input("Enter ID to Delete:", min_value=0, step=1)
+            if st.button("❌ Delete Entry", type="primary"):
+                supabase.table("knowledge_base").delete().eq("id", delete_id).execute()
+                st.warning(f"ID {delete_id} deleted!")
+                st.rerun()
+    else:
+        st.info("Database is empty.")
 
-# --- TAB 3: AI PERSONA ---
+# ==========================================
+# TAB 3: CATEGORIES
+# ==========================================
 with tab3:
-    st.header("Adjust AI Behavior")
-    st.markdown("Give the AI instructions on how to talk, what language to use, and how strict it should be.")
+    st.header("Manage Categories")
+    st.write("Current Categories:", ", ".join(categories_list))
     
-    # Fetch current persona
-    current_persona = supabase.table("bot_config").select("persona_prompt").eq("id", 1).execute().data[0]["persona_prompt"]
+    col_c1, col_c2 = st.columns(2)
+    with col_c1:
+        new_cat = st.text_input("Add New Category:")
+        if st.button("Add Category"):
+            if new_cat:
+                supabase.table("categories").insert({"name": new_cat}).execute()
+                st.success("Added!")
+                st.rerun()
+    with col_c2:
+        del_cat = st.selectbox("Delete Category:", categories_list)
+        if st.button("Delete Category"):
+            supabase.table("categories").delete().eq("name", del_cat).execute()
+            st.warning("Deleted!")
+            st.rerun()
+
+# ==========================================
+# TAB 4: AI PERSONA
+# ==========================================
+with tab4:
+    st.header("Adjust AI Persona")
+    try:
+        current_persona = supabase.table("bot_config").select("persona_prompt").eq("id", 1).execute().data[0]["persona_prompt"]
+    except: current_persona = "You are a helpful assistant."
     
-    new_persona = st.text_area("System Prompt / Persona:", value=current_persona, height=200)
-    
+    new_persona = st.text_area("System Prompt:", value=current_persona, height=250)
     if st.button("Update AI Persona"):
         supabase.table("bot_config").update({"persona_prompt": new_persona}).eq("id", 1).execute()
-        st.success("✅ AI Behavior Updated! The bot will now follow these instructions.")
+        st.success("✅ Persona Updated!")
 
-# --- TAB 4: DATABASE VIEW ---
-with tab4:
-    st.header("Current Knowledge Base")
-    if st.button("Refresh Database View"):
-        data = supabase.table("knowledge_base").select("*").execute().data
-        if data:
-            st.dataframe(pd.DataFrame(data))
-        else:
-            st.info("Database is empty.")
+# ==========================================
+# TAB 5: TEST BOT SIMULATOR
+# ==========================================
+with tab5:
+    st.header("💬 Live Bot Testing")
+    st.markdown("Test the bot exactly as it behaves on Telegram, using your live database.")
+    
+    # Initialize chat history
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+
+    # Display chat messages
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Chat Input
+    if prompt := st.chat_input("Ask the scout assistant..."):
+        # Add user message to UI
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"): st.markdown(prompt)
+
+        # Assemble context from DB
+        kb_raw = get_kb_data()
+        kb_text = "\n".join([f"[{i['category']}] {i['content']}" for i in kb_raw]) if kb_raw else "No knowledge base data."
+        
+        try:
+            persona = supabase.table("bot_config").select("persona_prompt").eq("id", 1).execute().data[0]["persona_prompt"]
+        except: persona = "You are a helpful assistant."
+
+        strict_prompt = f"""
+        {persona}
+        RULES:
+        1. Answer the user's question relying primarily on the Knowledge Base below. 
+        2. If the user's question cannot be answered using the Knowledge Base, reply exactly with: "NOT_FOUND_IN_KB".
+        3. Always reply in the language the user speaks.
+        
+        KNOWLEDGE BASE:
+        {kb_text}
+        
+        USER QUESTION: {prompt}
+        """
+
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                try:
+                    response = client.models.generate_content(model='gemini-2.5-flash', contents=strict_prompt)
+                    bot_reply = response.text.strip()
+                    
+                    if "NOT_FOUND_IN_KB" in bot_reply:
+                        st.markdown("*عذراً، لا أملك هذه المعلومة في قاعدة بياناتي. (Simulated Google Search Prompt)*")
+                        st.session_state.messages.append({"role": "assistant", "content": "*[Bot triggered Google Search Fallback]*"})
+                    else:
+                        st.markdown(bot_reply)
+                        st.session_state.messages.append({"role": "assistant", "content": bot_reply})
+                except Exception as e:
+                    st.error(f"Error: {e}")
