@@ -7,26 +7,37 @@ from google import genai
 import os
 import io
 
-# --- SECRETS ---
-ADMIN_PASSWORD = "mysecretpassword123"
+# --- SECRETS (100% SECURE FOR PUBLIC GITHUB) ---
+# We use os.environ to pull these from Streamlit's hidden Advanced Settings.
+# NEVER type real passwords or keys directly into this file!
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # --- LOGIN ---
-if "logged_in" not in st.session_state: st.session_state.logged_in = False
+if "logged_in" not in st.session_state: 
+    st.session_state.logged_in = False
+
 if not st.session_state.logged_in:
+    st.warning("🔒 Secure Admin Panel")
     pwd = st.text_input("Enter Admin Password", type="password")
-    if pwd == ADMIN_PASSWORD:
+    
+    # Check if the password matches AND ensure the secret isn't empty
+    if pwd == ADMIN_PASSWORD and ADMIN_PASSWORD is not None:
         st.session_state.logged_in = True
         st.rerun()
+    elif pwd:
+        st.error("Incorrect Password or Secrets not configured yet.")
     st.stop()
 
+# --- INITIALIZE CLIENTS ---
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 st.title("⚙️ Admin Knowledge Base Panel")
 
+# --- UPLOAD SECTION ---
 st.header("Upload Files (PDF, CSV, TXT, Images)")
 uploaded_files = st.file_uploader("Upload files here", accept_multiple_files=True)
 
@@ -57,9 +68,16 @@ if st.button("Process & Save to Database"):
         st.success("✅ Saved permanently to Supabase!")
 
 st.divider()
+
+# --- VIEW DATABASE SECTION ---
 if st.button("Refresh Database View"):
-    data = supabase.table("knowledge_base").select("*").execute().data
-    st.dataframe(pd.DataFrame(data))
+    try:
+        data = supabase.table("knowledge_base").select("*").execute().data
+        st.dataframe(pd.DataFrame(data))
+    except Exception as e:
+        st.error(f"Failed to connect to database. Check your Supabase secrets! Error: {e}")
+        
     if st.button("⚠️ DELETE ALL DATA"):
         supabase.table("knowledge_base").delete().neq("id", 0).execute()
+        st.success("Database wiped.")
         st.rerun()
