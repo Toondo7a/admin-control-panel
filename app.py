@@ -29,182 +29,194 @@ if not st.session_state.logged_in:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-st.title("⚜️ Scout AI - Ultimate Control Panel V3")
+st.title("⚜️ Scout AI - Ultimate Control Panel V4")
 
-# --- FETCH DYNAMIC DATA ---
+# --- FETCH DATA ---
 def get_categories():
-    try:
-        data = supabase.table("categories").select("name").execute().data
-        return [item["name"] for item in data]
+    try: return [item["name"] for item in supabase.table("categories").select("name").execute().data]
     except: return ["General"]
 
 def get_kb_data():
-    try:
-        return supabase.table("knowledge_base").select("*").order("id").execute().data
+    try: return supabase.table("knowledge_base").select("*").order("id").execute().data
     except: return []
 
 categories_list = get_categories()
 
 # --- DASHBOARD TABS ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📄 Add Content", "🗂️ Manage Knowledge Base", "🏷️ Categories", "🤖 AI Persona", "💬 Test Bot"
+    "📄 Add Content", "🗂️ Manage Data", "🤖 AI & Greeting", "🎛️ Interactive Menus", "💬 Test Bot"
 ])
 
 # ==========================================
-# TAB 1: ADD CONTENT (Uploads & FAQs)
+# TAB 1 & 2: CONTENT UPLOAD & DB EDITOR
 # ==========================================
 with tab1:
+    st.header("Upload Files & FAQs")
     col1, col2 = st.columns(2)
     with col1:
-        st.header("Upload Files")
-        upload_category = st.selectbox("Category:", categories_list, key="up_cat")
-        uploaded_files = st.file_uploader("Upload PDF, CSV, TXT, or Images", accept_multiple_files=True)
-        if st.button("Process & Save Uploads"):
-            if uploaded_files:
-                with st.spinner("Saving to database..."):
-                    for file in uploaded_files:
-                        kb_text = ""
-                        if file.name.endswith('.pdf'):
-                            for page in PyPDF2.PdfReader(file).pages:
-                                if page.extract_text(): kb_text += page.extract_text() + "\n"
-                        elif file.name.endswith('.txt'):
-                            kb_text += file.getvalue().decode('utf-8') + "\n"
-                        if kb_text:
-                            supabase.table("knowledge_base").insert({"content": kb_text, "category": upload_category, "source_type": "Document"}).execute()
-                    st.success("✅ Files saved!")
-    
+        upload_category = st.selectbox("Category:", categories_list)
+        uploaded_files = st.file_uploader("Upload PDF, TXT, Images", accept_multiple_files=True)
+        if st.button("Save Uploads") and uploaded_files:
+            with st.spinner("Saving to database..."):
+                for file in uploaded_files:
+                    kb_text = ""
+                    if file.name.endswith('.pdf'):
+                        for page in PyPDF2.PdfReader(file).pages:
+                            if page.extract_text(): kb_text += page.extract_text() + "\n"
+                    elif file.name.endswith('.txt'):
+                        kb_text += file.getvalue().decode('utf-8') + "\n"
+                    if kb_text:
+                        supabase.table("knowledge_base").insert({"content": kb_text, "category": upload_category, "source_type": "Document"}).execute()
+                st.success("✅ Files saved!")
     with col2:
-        st.header("Add Manual FAQ / Rule")
-        faq_category = st.selectbox("Category:", categories_list, key="faq_cat")
-        faq_q = st.text_input("Question / Topic:")
-        faq_a = st.text_area("Answer / Details:")
-        if st.button("Save Manual Entry"):
-            if faq_q and faq_a:
-                supabase.table("knowledge_base").insert({"content": f"Q: {faq_q}\nA: {faq_a}", "category": faq_category, "source_type": "FAQ"}).execute()
-                st.success("✅ FAQ Added!")
+        faq_q = st.text_input("FAQ Question:")
+        faq_a = st.text_area("FAQ Answer:")
+        if st.button("Save FAQ") and faq_q and faq_a:
+            supabase.table("knowledge_base").insert({"content": f"Q: {faq_q}\nA: {faq_a}", "category": upload_category, "source_type": "FAQ"}).execute()
+            st.success("✅ FAQ Added!")
 
-# ==========================================
-# TAB 2: MANAGE KNOWLEDGE BASE (Edit/Delete)
-# ==========================================
 with tab2:
     st.header("Database Editor")
     kb_data = get_kb_data()
-    
     if kb_data:
-        df = pd.DataFrame(kb_data)
-        st.dataframe(df, use_container_width=True)
-        
-        st.divider()
-        st.subheader("Edit or Delete an Entry")
+        st.dataframe(pd.DataFrame(kb_data), use_container_width=True)
         colA, colB = st.columns(2)
-        
         with colA:
-            edit_id = st.number_input("Enter ID to Edit:", min_value=0, step=1)
-            new_content = st.text_area("New Content for this ID:", height=150)
+            edit_id = st.number_input("ID to Edit:", min_value=0, step=1)
+            new_content = st.text_area("New Content:", height=100)
             if st.button("📝 Update Entry"):
                 supabase.table("knowledge_base").update({"content": new_content}).eq("id", edit_id).execute()
-                st.success(f"ID {edit_id} updated!")
                 st.rerun()
-                
         with colB:
-            delete_id = st.number_input("Enter ID to Delete:", min_value=0, step=1)
+            delete_id = st.number_input("ID to Delete:", min_value=0, step=1)
             if st.button("❌ Delete Entry", type="primary"):
                 supabase.table("knowledge_base").delete().eq("id", delete_id).execute()
-                st.warning(f"ID {delete_id} deleted!")
                 st.rerun()
-    else:
-        st.info("Database is empty.")
 
 # ==========================================
-# TAB 3: CATEGORIES
+# TAB 3: AI PERSONA & GREETING
 # ==========================================
 with tab3:
-    st.header("Manage Categories")
-    st.write("Current Categories:", ", ".join(categories_list))
+    st.header("Bot Configuration")
+    try:
+        config_data = supabase.table("bot_config").select("*").eq("id", 1).execute().data[0]
+        curr_persona = config_data.get("persona_prompt", "")
+        curr_greet = config_data.get("greeting_message", "")
+    except: 
+        curr_persona, curr_greet = "", ""
     
-    col_c1, col_c2 = st.columns(2)
-    with col_c1:
-        new_cat = st.text_input("Add New Category:")
-        if st.button("Add Category"):
-            if new_cat:
-                supabase.table("categories").insert({"name": new_cat}).execute()
-                st.success("Added!")
-                st.rerun()
-    with col_c2:
-        del_cat = st.selectbox("Delete Category:", categories_list)
-        if st.button("Delete Category"):
-            supabase.table("categories").delete().eq("name", del_cat).execute()
-            st.warning("Deleted!")
-            st.rerun()
+    new_greet = st.text_area("Greeting Message (Sent when user clicks /start):", value=curr_greet, height=100)
+    new_persona = st.text_area("AI System Prompt:", value=curr_persona, height=200)
+    
+    if st.button("Update Bot Settings"):
+        supabase.table("bot_config").update({"greeting_message": new_greet, "persona_prompt": new_persona}).eq("id", 1).execute()
+        st.success("✅ Settings Updated!")
 
 # ==========================================
-# TAB 4: AI PERSONA
+# TAB 4: INTERACTIVE MENU BUILDER (With Edit)
 # ==========================================
 with tab4:
-    st.header("Adjust AI Persona")
-    try:
-        current_persona = supabase.table("bot_config").select("persona_prompt").eq("id", 1).execute().data[0]["persona_prompt"]
-    except: current_persona = "You are a helpful assistant."
+    st.header("Build & Edit Bot Menus")
+    st.markdown("Create nested buttons. A button can open a **submenu** (more buttons) or trigger an **AI Reply**.")
     
-    new_persona = st.text_area("System Prompt:", value=current_persona, height=250)
-    if st.button("Update AI Persona"):
-        supabase.table("bot_config").update({"persona_prompt": new_persona}).eq("id", 1).execute()
-        st.success("✅ Persona Updated!")
+    try:
+        menus_response = supabase.table("bot_menus").select("*").order("id").execute()
+        menus = menus_response.data if menus_response.data else []
+        
+        if menus:
+            st.dataframe(pd.DataFrame(menus), use_container_width=True)
+        else:
+            st.info("No menus found. Create your first Main Menu button below!")
+            
+        st.divider()
+        colM1, colM2 = st.columns(2)
+        
+        menu_options = {"0": "None (Main Menu)"}
+        for m in menus: menu_options[str(m["id"])] = f"ID: {m['id']} - {m['button_text']}"
+        
+        with colM1:
+            st.subheader("➕ Add New Button")
+            parent_sel = st.selectbox("Select Parent Menu:", options=list(menu_options.keys()), format_func=lambda x: menu_options[x], key="add_parent")
+            btn_text = st.text_input("Button Text:", key="add_text")
+            act_type = st.radio("When user clicks this button:", ["Open Submenu (submenu)", "Generate Final Answer (ai_reply)"], key="add_act")
+            
+            reply_prmpt = ""
+            if "ai_reply" in act_type:
+                reply_prmpt = st.text_area("Hidden AI Prompt:", key="add_prmpt")
+            
+            if st.button("➕ Add Button", type="primary"):
+                if btn_text:
+                    parent_val = int(parent_sel) if parent_sel != "0" else None
+                    action_val = "submenu" if "submenu" in act_type else "ai_reply"
+                    supabase.table("bot_menus").insert({
+                        "parent_id": parent_val, "button_text": btn_text, 
+                        "action_type": action_val, "reply_prompt": reply_prmpt
+                    }).execute()
+                    st.rerun()
+        
+        with colM2:
+            st.subheader("✏️ Edit Existing Button")
+            if menus:
+                edit_id = st.selectbox("Select ID to Edit:", [m["id"] for m in menus], key="edit_id")
+                curr_menu = next((m for m in menus if m["id"] == edit_id), None)
+                
+                if curr_menu:
+                    curr_parent_str = str(curr_menu["parent_id"]) if curr_menu["parent_id"] else "0"
+                    parent_opts_list = list(menu_options.keys())
+                    p_idx = parent_opts_list.index(curr_parent_str) if curr_parent_str in parent_opts_list else 0
+                    
+                    new_parent_sel = st.selectbox("New Parent Menu:", options=parent_opts_list, format_func=lambda x: menu_options[x], index=p_idx, key="edit_parent")
+                    new_btn_text = st.text_input("New Button Text:", value=curr_menu["button_text"], key="edit_text")
+                    
+                    a_idx = 0 if curr_menu["action_type"] == "submenu" else 1
+                    new_act_type = st.radio("New Action Type:", ["Open Submenu (submenu)", "Generate Final Answer (ai_reply)"], index=a_idx, key="edit_act")
+                    
+                    new_reply_prmpt = ""
+                    if "ai_reply" in new_act_type:
+                        new_reply_prmpt = st.text_area("New Hidden AI Prompt:", value=curr_menu.get("reply_prompt") or "", key="edit_prmpt")
+                    
+                    if st.button("📝 Save Changes"):
+                        p_val = int(new_parent_sel) if new_parent_sel != "0" else None
+                        a_val = "submenu" if "submenu" in new_act_type else "ai_reply"
+                        supabase.table("bot_menus").update({
+                            "parent_id": p_val, "button_text": new_btn_text,
+                            "action_type": a_val, "reply_prompt": new_reply_prmpt
+                        }).eq("id", edit_id).execute()
+                        st.success("✅ Button Updated!")
+                        st.rerun()
+                
+                st.divider()
+                st.subheader("❌ Delete Button")
+                del_menu_id = st.selectbox("Select ID to Delete:", [m["id"] for m in menus], key="del_id")
+                if st.button("Delete Selected Button"):
+                    supabase.table("bot_menus").delete().eq("id", del_menu_id).execute()
+                    st.rerun()
+
+    except Exception as e:
+        st.error(f"Error loading menus: {e}")
 
 # ==========================================
 # TAB 5: TEST BOT SIMULATOR
 # ==========================================
 with tab5:
     st.header("💬 Live Bot Testing")
-    st.markdown("Test the bot exactly as it behaves on Telegram, using your live database.")
-    
-    # Initialize chat history
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+    if "messages" not in st.session_state: st.session_state.messages = []
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
-    # Display chat messages
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    # Chat Input
     if prompt := st.chat_input("Ask the scout assistant..."):
-        # Add user message to UI
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"): st.markdown(prompt)
 
-        # Assemble context from DB
         kb_raw = get_kb_data()
-        kb_text = "\n".join([f"[{i['category']}] {i['content']}" for i in kb_raw]) if kb_raw else "No knowledge base data."
-        
-        try:
-            persona = supabase.table("bot_config").select("persona_prompt").eq("id", 1).execute().data[0]["persona_prompt"]
-        except: persona = "You are a helpful assistant."
-
-        strict_prompt = f"""
-        {persona}
-        RULES:
-        1. Answer the user's question relying primarily on the Knowledge Base below. 
-        2. If the user's question cannot be answered using the Knowledge Base, reply exactly with: "NOT_FOUND_IN_KB".
-        3. Always reply in the language the user speaks.
-        
-        KNOWLEDGE BASE:
-        {kb_text}
-        
-        USER QUESTION: {prompt}
-        """
+        kb_text = "\n".join([f"[{i['category']}] {i['content']}" for i in kb_raw]) if kb_raw else "No data."
+        strict_prompt = f"{curr_persona}\nKNOWLEDGE BASE:\n{kb_text}\nUSER QUESTION: {prompt}"
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
                     response = client.models.generate_content(model='gemini-2.5-flash', contents=strict_prompt)
-                    bot_reply = response.text.strip()
-                    
-                    if "NOT_FOUND_IN_KB" in bot_reply:
-                        st.markdown("*عذراً، لا أملك هذه المعلومة في قاعدة بياناتي. (Simulated Google Search Prompt)*")
-                        st.session_state.messages.append({"role": "assistant", "content": "*[Bot triggered Google Search Fallback]*"})
-                    else:
-                        st.markdown(bot_reply)
-                        st.session_state.messages.append({"role": "assistant", "content": bot_reply})
+                    st.markdown(response.text.strip())
+                    st.session_state.messages.append({"role": "assistant", "content": response.text.strip()})
                 except Exception as e:
                     st.error(f"Error: {e}")
