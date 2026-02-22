@@ -29,7 +29,7 @@ if not st.session_state.logged_in:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-st.title("⚜️ Scout AI - Ultimate Control Panel V4")
+st.title("⚜️ Scout AI - Ultimate Control Panel V4.1")
 
 # --- FETCH DATA ---
 def get_categories():
@@ -113,11 +113,11 @@ with tab3:
         st.success("✅ Settings Updated!")
 
 # ==========================================
-# TAB 4: INTERACTIVE MENU BUILDER (With Edit)
+# TAB 4: INTERACTIVE MENU BUILDER 
 # ==========================================
 with tab4:
     st.header("Build & Edit Bot Menus")
-    st.markdown("Create nested buttons. A button can open a **submenu** (more buttons) or trigger an **AI Reply**.")
+    st.markdown("Create nested buttons with 3 options: Submenu, AI Generation, or Specific Text.")
     
     try:
         menus_response = supabase.table("bot_menus").select("*").order("id").execute()
@@ -138,16 +138,23 @@ with tab4:
             st.subheader("➕ Add New Button")
             parent_sel = st.selectbox("Select Parent Menu:", options=list(menu_options.keys()), format_func=lambda x: menu_options[x], key="add_parent")
             btn_text = st.text_input("Button Text:", key="add_text")
-            act_type = st.radio("When user clicks this button:", ["Open Submenu (submenu)", "Generate Final Answer (ai_reply)"], key="add_act")
+            
+            # The 3 Options!
+            act_type = st.radio("When user clicks this button:", ["Open Submenu (submenu)", "Generate AI Answer (ai_reply)", "Send Specific Text (static_text)"], key="add_act")
             
             reply_prmpt = ""
             if "ai_reply" in act_type:
                 reply_prmpt = st.text_area("Hidden AI Prompt:", key="add_prmpt")
+            elif "static_text" in act_type:
+                reply_prmpt = st.text_area("Exact Text to Send:", key="add_static")
             
             if st.button("➕ Add Button", type="primary"):
                 if btn_text:
                     parent_val = int(parent_sel) if parent_sel != "0" else None
-                    action_val = "submenu" if "submenu" in act_type else "ai_reply"
+                    if "submenu" in act_type: action_val = "submenu"
+                    elif "ai_reply" in act_type: action_val = "ai_reply"
+                    else: action_val = "static_text"
+                    
                     supabase.table("bot_menus").insert({
                         "parent_id": parent_val, "button_text": btn_text, 
                         "action_type": action_val, "reply_prompt": reply_prmpt
@@ -168,16 +175,25 @@ with tab4:
                     new_parent_sel = st.selectbox("New Parent Menu:", options=parent_opts_list, format_func=lambda x: menu_options[x], index=p_idx, key="edit_parent")
                     new_btn_text = st.text_input("New Button Text:", value=curr_menu["button_text"], key="edit_text")
                     
-                    a_idx = 0 if curr_menu["action_type"] == "submenu" else 1
-                    new_act_type = st.radio("New Action Type:", ["Open Submenu (submenu)", "Generate Final Answer (ai_reply)"], index=a_idx, key="edit_act")
+                    # Logic to highlight the correct option when editing
+                    a_idx = 0
+                    if curr_menu["action_type"] == "ai_reply": a_idx = 1
+                    elif curr_menu["action_type"] == "static_text": a_idx = 2
+                        
+                    new_act_type = st.radio("New Action Type:", ["Open Submenu (submenu)", "Generate AI Answer (ai_reply)", "Send Specific Text (static_text)"], index=a_idx, key="edit_act")
                     
                     new_reply_prmpt = ""
                     if "ai_reply" in new_act_type:
                         new_reply_prmpt = st.text_area("New Hidden AI Prompt:", value=curr_menu.get("reply_prompt") or "", key="edit_prmpt")
+                    elif "static_text" in new_act_type:
+                        new_reply_prmpt = st.text_area("Exact Text to Send:", value=curr_menu.get("reply_prompt") or "", key="edit_static")
                     
                     if st.button("📝 Save Changes"):
                         p_val = int(new_parent_sel) if new_parent_sel != "0" else None
-                        a_val = "submenu" if "submenu" in new_act_type else "ai_reply"
+                        if "submenu" in new_act_type: a_val = "submenu"
+                        elif "ai_reply" in new_act_type: a_val = "ai_reply"
+                        else: a_val = "static_text"
+                        
                         supabase.table("bot_menus").update({
                             "parent_id": p_val, "button_text": new_btn_text,
                             "action_type": a_val, "reply_prompt": new_reply_prmpt
